@@ -2,10 +2,13 @@
 # Matrix UX tricks — exercise flows between agent, TEE, and Element mobile
 # Usage: ./tricks.sh <trick_name>
 
-HS="https://a8629a1195ecb53afe1700cd3bafda1d18d9635d-6167.dstack-pha-prod7.phala.network"
-CHALLENGE="https://a8629a1195ecb53afe1700cd3bafda1d18d9635d-8080.dstack-pha-prod7.phala.network"
-BOT_TOKEN="wHDogRgq8fsE6npMYgYUckjaXB6vtJUW"
-USER="@socrates1024:matrix.org"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+[ -f "$SCRIPT_DIR/.env" ] && source "$SCRIPT_DIR/.env"
+
+HS="${MATRIX_HOMESERVER:?Set MATRIX_HOMESERVER in .env}"
+CHALLENGE="${CHALLENGE_URL:?Set CHALLENGE_URL in .env}"
+BOT_TOKEN="${BOT_ACCESS_TOKEN:?Set BOT_ACCESS_TOKEN in .env}"
+USER="${INVITE_USER:-@socrates1024:matrix.org}"
 
 send() {
   local room=$1 msg=$2

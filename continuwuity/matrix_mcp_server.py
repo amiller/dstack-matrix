@@ -12,7 +12,7 @@ from run_sandbox import run_js
 # Config
 HOMESERVER = os.environ.get("HOMESERVER", "http://localhost:6167")
 PUBLIC_HOMESERVER = os.environ.get("PUBLIC_HOMESERVER", HOMESERVER)
-REGISTRATION_TOKEN = os.environ.get("REGISTRATION_TOKEN", "hermes-bot-dev")
+REGISTRATION_TOKEN = os.environ["REGISTRATION_TOKEN"]
 NOTEBOOK_URL = os.environ.get("NOTEBOOK_URL", "https://hermes.teleport.computer")
 CHALLENGES_DIR = os.environ.get("CHALLENGES_DIR", "challenges")
 DENO_PATH = os.environ.get("DENO_PATH", "deno")

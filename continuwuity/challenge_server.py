@@ -5,7 +5,7 @@ from run_sandbox import run_js
 CHALLENGES_DIR = os.environ.get("CHALLENGES_DIR", "challenges")
 HOMESERVER = os.environ.get("HOMESERVER", "http://localhost:6167")
 PUBLIC_HOMESERVER = os.environ.get("PUBLIC_HOMESERVER", HOMESERVER)
-REGISTRATION_TOKEN = os.environ.get("REGISTRATION_TOKEN", "hermes-bot-dev")
+REGISTRATION_TOKEN = os.environ["REGISTRATION_TOKEN"]
 DENO_PATH = os.environ.get("DENO_PATH", "deno")
 RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "3"))
 
