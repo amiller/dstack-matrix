@@ -1,0 +1,6 @@
+{
+  "id": "flatten",
+  "prompt": "Write a JavaScript function `flatten(arr)` that deeply flattens a nested array. For example, `flatten([1, [2, [3, [4]]]])` should return `[1, 2, 3, 4]`. Do not use `Array.prototype.flat`.",
+  "function_name": "flatten",
+  "test_code": "const assert = (cond, msg) => { if (!cond) throw new Error(msg); };\nassert(JSON.stringify(flatten([1, [2, [3, [4]]]])) === JSON.stringify([1, 2, 3, 4]), 'test 1');\nassert(JSON.stringify(flatten([])) === JSON.stringify([]), 'test 2');\nassert(JSON.stringify(flatten([1, 2, 3])) === JSON.stringify([1, 2, 3]), 'test 3');\nassert(JSON.stringify(flatten([[[[1]]]])) === JSON.stringify([1]), 'test 4');\nassert(JSON.stringify(flatten([1, [2, 3], [4, [5, 6]]])) === JSON.stringify([1, 2, 3, 4, 5, 6]), 'test 5');\nconsole.log('PASS');"
+}

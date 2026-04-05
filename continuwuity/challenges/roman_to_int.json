@@ -1,0 +1,6 @@
+{
+  "id": "roman_to_int",
+  "prompt": "Write a JavaScript function `romanToInt(s)` that converts a Roman numeral string to an integer. Handle subtractive notation (e.g., IV=4, IX=9, XL=40, XC=90, CD=400, CM=900).",
+  "function_name": "romanToInt",
+  "test_code": "const assert = (cond, msg) => { if (!cond) throw new Error(msg); };\nassert(romanToInt('III') === 3, 'test 1');\nassert(romanToInt('IV') === 4, 'test 2');\nassert(romanToInt('IX') === 9, 'test 3');\nassert(romanToInt('XLII') === 42, 'test 4');\nassert(romanToInt('MCMXCIV') === 1994, 'test 5');\nassert(romanToInt('CDXLIV') === 444, 'test 6');\nconsole.log('PASS');"
+}

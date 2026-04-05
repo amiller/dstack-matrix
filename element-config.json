@@ -1,0 +1,11 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "https://4292190d21a00e7cde508b9d7365ea7a9e3cfa18-8008.dstack-pha-prod7.phala.network",
+      "server_name": "4292190d21a00e7cde508b9d7365ea7a9e3cfa18-8008.dstack-pha-prod7.phala.network"
+    }
+  },
+  "brand": "Element",
+  "disable_guests": true,
+  "disable_3pid_login": true
+}

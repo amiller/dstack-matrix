@@ -1,0 +1,57 @@
+services:
+  synapse:
+    image: ghcr.io/amiller/dstack-matrix@sha256:3a370b794cd70929e246b77751829d93078a1c12449a72d2948fd753404741ca
+    ports:
+      - "8008:8008"
+    volumes:
+      - synapse-data:/data
+    environment:
+      - GITHUB_OAUTH_SECRET=${GITHUB_OAUTH_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+    environment:
+      - POSTGRES_USER=synapse
+      - POSTGRES_PASSWORD=synapse
+      - POSTGRES_DB=synapse
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  element:
+    image: vectorim/element-web@sha256:5107e63026c13ed014f743e485821b7d4b56d275a41e76303859bb14f5f94eb6
+    ports:
+      - "8443:80"
+    configs:
+      - source: element_config
+        target: /app/config.json
+    restart: unless-stopped
+
+volumes:
+  synapse-data:
+  postgres-data:
+
+configs:
+  element_config:
+    content: |
+      {
+        "default_server_config": {
+          "m.homeserver": {
+            "base_url": "https://4292190d21a00e7cde508b9d7365ea7a9e3cfa18-8008.dstack-pha-prod7.phala.network",
+            "server_name": "4292190d21a00e7cde508b9d7365ea7a9e3cfa18-8008.dstack-pha-prod7.phala.network"
+          }
+        },
+        "brand": "Element",
+        "disable_guests": true,
+        "disable_3pid_login": true
+      }

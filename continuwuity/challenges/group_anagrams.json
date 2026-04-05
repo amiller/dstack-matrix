@@ -1,0 +1,6 @@
+{
+  "id": "group_anagrams",
+  "prompt": "Write a JavaScript function `groupAnagrams(words)` that takes an array of strings and groups anagrams together. Return an array of arrays, where each inner array contains words that are anagrams of each other, sorted alphabetically. The outer array should be sorted by the first element of each group.",
+  "function_name": "groupAnagrams",
+  "test_code": "const assert = (cond, msg) => { if (!cond) throw new Error(msg); };\nconst r1 = groupAnagrams(['eat', 'tea', 'tan', 'ate', 'nat', 'bat']);\nassert(JSON.stringify(r1) === JSON.stringify([['ate', 'eat', 'tea'], ['bat'], ['nat', 'tan']]), 'test 1: ' + JSON.stringify(r1));\nconst r2 = groupAnagrams(['']);\nassert(JSON.stringify(r2) === JSON.stringify([['']]), 'test 2');\nconst r3 = groupAnagrams(['a']);\nassert(JSON.stringify(r3) === JSON.stringify([['a']]), 'test 3');\nconsole.log('PASS');"
+}

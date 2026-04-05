@@ -1,0 +1,15 @@
+[global]
+server_name = "a8629a1195ecb53afe1700cd3bafda1d18d9635d-6167.dstack-pha-prod7.phala.network"
+database_backend = "rocksdb"
+database_path = "/var/lib/conduwuit"
+address = "0.0.0.0"
+port = 6167
+allow_registration = true
+registration_token = "hermes-bot-dev"
+allow_federation = true
+new_user_displayname_suffix = ""
+log = "info"
+
+[global.well_known]
+client = "https://a8629a1195ecb53afe1700cd3bafda1d18d9635d-6167.dstack-pha-prod7.phala.network"
+server = "a8629a1195ecb53afe1700cd3bafda1d18d9635d-6167.dstack-pha-prod7.phala.network:443"

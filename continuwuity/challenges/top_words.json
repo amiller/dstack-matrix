@@ -1,0 +1,6 @@
+{
+  "id": "top_words",
+  "prompt": "Write a JavaScript function `topWords(text, n)` that returns an array of the `n` most frequent words in `text` (case-insensitive, split on whitespace). If two words have the same frequency, order them alphabetically. Return lowercase words.",
+  "function_name": "topWords",
+  "test_code": "const assert = (cond, msg) => { if (!cond) throw new Error(msg); };\nassert(JSON.stringify(topWords('the cat sat on the mat', 2)) === JSON.stringify(['the', 'cat']), 'test 1');\nassert(JSON.stringify(topWords('a b c a b a', 1)) === JSON.stringify(['a']), 'test 2');\nassert(JSON.stringify(topWords('Hello hello HELLO world', 2)) === JSON.stringify(['hello', 'world']), 'test 3');\nassert(JSON.stringify(topWords('x y z x y z', 3)) === JSON.stringify(['x', 'y', 'z']), 'test 4');\nconsole.log('PASS');"
+}
