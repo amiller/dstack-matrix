@@ -1,4 +1,7 @@
 secrets.env
-deploy/key.pem
-continuwuity/.env
+*.pem
+*.pem.pub
 __pycache__/
+.env
+.pytest_cache/
+.claude/

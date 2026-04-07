@@ -1,0 +1,14 @@
+services:
+  continuwuity:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    ports:
+      - "6167:6167"
+    volumes:
+      - ./continuwuity/continuwuity.toml:/etc/conduwuit.toml:ro
+      - continuwuity-data:/var/lib/conduwuit
+    environment:
+      CONDUWUIT_CONFIG: /etc/conduwuit.toml
+    restart: unless-stopped
+
+volumes:
+  continuwuity-data:

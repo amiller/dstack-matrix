@@ -1,6 +1,0 @@
-{
-  "id": "balanced_parens",
-  "prompt": "Write a JavaScript function `balancedParens(s)` that returns `true` if the string has balanced parentheses `()`, brackets `[]`, and braces `{}`, and `false` otherwise. Ignore all other characters.",
-  "function_name": "balancedParens",
-  "test_code": "const assert = (cond, msg) => { if (!cond) throw new Error(msg); };\nassert(balancedParens('()[]{}') === true, 'test 1');\nassert(balancedParens('([{}])') === true, 'test 2');\nassert(balancedParens('(]') === false, 'test 3');\nassert(balancedParens('([)]') === false, 'test 4');\nassert(balancedParens('hello (world) [foo] {bar}') === true, 'test 5');\nassert(balancedParens('') === true, 'test 6');\nassert(balancedParens('((())') === false, 'test 7');\nconsole.log('PASS');"
-}
