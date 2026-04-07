@@ -1,22 +1,10 @@
 # dstack-matrix
 
-Example: Matrix homeserver on Phala Network TEE (dstack).
+Example deployment of a Matrix homeserver on Phala Network TEE (dstack).
 
-## What this repo is
+## What this is
 
 A minimal, copy-paste-ready example of running Continuwuity (Matrix homeserver) on a Phala dstack CVM. Public reference for anyone wanting to run Matrix in a TEE.
-
-## What this repo is NOT
-
-This is not the Teleport Router deployment. That lives at `~/projects/teleport/dev-router-matrix/` (private repo `Account-Link/dev-router-matrix`).
-
-## Related repos
-
-| Repo | Visibility | Purpose |
-|---|---|---|
-| `dstack-matrix` | public | This one -- example/tutorial |
-| `Account-Link/dev-router-matrix` | private | Teleport Router product (MCP bot, live CVM) |
-| `amiller/hermes-introducer` | public (archived) | Standalone hivemind POC, cross-agent introductions |
 
 ## Folder structure
 
@@ -43,9 +31,14 @@ phala cvms restart <UUID>
 # 3. Server at: https://<APP-ID>-6167.dstack-pha-prod7.phala.network
 ```
 
-## CVM details
+## Pitfalls
 
-- Production CVM: `dstack-continuwuity`
-- Gateway: `dstack-pha-prod7.phala.network`
-- Port mapping: container 6167 → gateway `<APP-ID>-6167`
-- SSH: `phala ssh dstack-continuwuity`
+- Deploy doesn't restart containers -- always follow `phala deploy` with `phala cvms restart <uuid>`
+- Server name must match the gateway URL, otherwise federation breaks
+- Port 6167 maps to gateway as `<APP-ID>-6167`
+- Named volumes persist across restarts
+- Don't delete and recreate the CVM -- you'll get a new app ID and all URLs change
+
+## Why Continuwuity?
+
+Continuwuity (formerly Conduwuit) is a lightweight Matrix homeserver written in Rust. It uses RocksDB, has minimal resource requirements, and works well inside TEE environments where memory and disk are limited. We previously ran Synapse (Python) -- see `synapse/` for the archived deployment.
