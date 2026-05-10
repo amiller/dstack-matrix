@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matrix protocol &amp; continuwuity — operator's deep dive</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --bg: #fafafa;
+    --rule: #d8d8d8;
+    --code-bg: #f1efe9;
+    --accent: #7a2c2c;
+  }
+  html { background: var(--bg); }
+  body {
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    max-width: 760px;
+    margin: 2.5rem auto 4rem;
+    padding: 0 1.25rem;
+  }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; line-height: 1.2; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .6rem; padding-top: .8rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
+  p, li { margin: .5rem 0; }
+  ul { padding-left: 1.4rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
+  pre {
+    background: var(--code-bg);
+    padding: .75rem .9rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.2rem; }
+  .tldr {
+    border-left: 3px solid var(--accent);
+    padding: .5rem .9rem;
+    background: #fff;
+    margin: 1rem 0 1.5rem;
+  }
+  .tldr p { margin: .25rem 0; }
+  .status {
+    display: inline-block;
+    background: #fff3d4;
+    border: 1px solid #d9b65b;
+    color: #6b4a08;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  a { color: var(--accent); }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: 0.93rem; }
+  th, td { border: 1px solid var(--rule); padding: .35rem .55rem; text-align: left; vertical-align: top; }
+  th { background: #fff; }
+  .uncertain { color: var(--muted); font-style: italic; }
+  footer { margin-top: 3rem; font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: .8rem; }
+</style>
+</head>
+<body>
+
+<h1>Matrix protocol &amp; continuwuity — operator's deep dive</h1>
+<div class="meta">
+  Andrew Miller (<a href="https://github.com/amiller">@amiller</a> /
+  <code>@socrates1024:matrix.org</code>) &middot; first written 2026-05-10 &middot;
+  <span class="status">draft</span>
+</div>
+
+<div class="tldr">
+  <p><strong>What this is.</strong> A self-contained reference for the parts of
+  the Matrix protocol you actually need to understand to run a homeserver and
+  bots on it. Federated event-sourced rooms, Olm + Megolm, to-device delivery,
+  and the operational footguns of <a href="https://forgejo.ellis.link/continuwuation/continuwuity">continuwuity</a>
+  specifically. The
+  <a href="matrix-megolm-rotation-bug.html">megolm rotation bug</a> is the
+  motivating case study at the end — every layer it touches is documented
+  above it.</p>
+</div>
+
+<h2>1. Rooms as federated event-sourced state machines</h2>
+
+<p>A Matrix room is a directed acyclic graph of events. Every event is signed
+by the sending server, references its predecessors by hash, and is replicated
+to every server that has a member in that room. There is no master copy of a
+room; conflicts between divergent histories are resolved deterministically
+(state resolution v2, below). Federation is therefore an active-active
+multi-master replication system, not a master/replica one.</p>
+
+<h3>1.1 Events: PDUs and EDUs</h3>
+
+<p>Two transport categories, with very different semantics:</p>
+
+<table>
+<tr><th>Kind</th><th>Persisted?</th><th>Replicated to whom?</th><th>Examples</th></tr>
+<tr>
+  <td><strong>PDU</strong> (Persistent Data Unit)</td>
+  <td>Yes — part of the room DAG forever</td>
+  <td>All servers with a member in the room</td>
+  <td><code>m.room.message</code>, <code>m.room.member</code>, <code>m.room.encrypted</code>, <code>m.room.create</code>, <code>m.room.power_levels</code>, <code>m.room.encryption</code></td>
+</tr>
+<tr>
+  <td><strong>EDU</strong> (Ephemeral Data Unit)</td>
+  <td>No — best-effort, fire-and-forget</td>
+  <td>One target server (or many, depending on EDU type)</td>
+  <td><code>m.typing</code>, <code>m.receipt</code>, <code>m.presence</code>, <code>m.direct_to_device</code></td>
+</tr>
+</table>
+
+<p>The federation spec calls EDUs "ephemeral" and is explicit that "they are
+not persisted and are not part of the history of a room, nor does the
+receiving homeserver have to reply to them"
+(<a href="https://spec.matrix.org/latest/server-server-api/#edus">server-server-api §EDUs</a>).
+This is load-bearing for the to-device-delivery story below: the
+<code>m.room_key</code> messages that distribute Megolm session keys ride
+inside <code>m.direct_to_device</code> EDUs, which means key delivery is
+not, at the protocol level, durable.</p>
+
+<h3>1.2 Room events vs state events</h3>
+
+<p>Every PDU has a <code>type</code> (<code>m.room.message</code>,
+<code>m.room.encrypted</code>, <code>m.room.member</code>, ...) and optionally
+a <code>state_key</code>. Events with a <code>state_key</code> are
+<em>state events</em>: they update the room's state map keyed on
+<code>(type, state_key)</code>. Events without one are <em>timeline events</em>:
+they're sequenced into the timeline but don't change room state. So
+<code>m.room.member</code> with <code>state_key=&quot;@bob:example.org&quot;</code>
+sets Bob's membership; <code>m.room.message</code> with no
+<code>state_key</code> just adds to the chat log.</p>
+
+<p>The auth rules are state-event-aware: whether you can send an event depends
+on the current <code>m.room.power_levels</code> state, your
+<code>m.room.member</code> state, and the room's <code>m.room.create</code>
+event. Each event explicitly references the state events it relies on for
+authorization, via <code>auth_events</code>. This is what makes state
+resolution deterministic across forks: every server, given the same DAG, can
+recompute the same authorized state without coordination.</p>
+
+<h3>1.3 State resolution v2 (briefly)</h3>
+
+<p>When two servers' views of the room state diverge (say a partition lets
+both sides admit a new member), state resolution v2 picks a winner per state
+key. The algorithm is in
+<a href="https://spec.matrix.org/latest/rooms/v2/#state-resolution">rooms/v2 §State resolution</a>;
+the short version is: take the intersection of unconflicted state, then for
+conflicted state keys re-run auth checks in a deterministic topological order
+seeded by power-level events. Room versions can tweak the algorithm — v12
+notably changed the seed from the unconflicted state map to an empty map
+(<a href="https://spec.matrix.org/latest/rooms/v12/">rooms/v12</a>).</p>
+
+<p>For operational debugging this rarely matters directly, but it matters
+indirectly: a bot whose recent messages are getting <code>403 Event is not
+authorized</code> on the receiving server is usually the victim of either a
+stale federation cache of state or a state-resolution divergence. The fix is
+almost always "rejoin the room" — which forces the bot's server to fetch
+fresh state via <code>send_join</code>.</p>
+
+<h3>1.4 Room versions, and why we pin to v11</h3>
+
+<p>Room versions are immutable per room: a room is created at one version and
+stays there. Newer versions tighten auth rules, change event hashing, or
+restructure event content. The relevant ones for us:</p>
+
+<ul>
+  <li><strong>v11</strong> — clarifies redaction rules. The
+  <code>creator</code> property is removed from <code>m.room.create</code>
+  (clients use <code>sender</code> instead);
+  <code>m.room.redaction.redacts</code> moves from top-level into
+  <code>content</code>; <code>origin</code> / <code>membership</code> /
+  <code>prev_state</code> are no longer redaction-protected
+  (<a href="https://spec.matrix.org/latest/rooms/v11/">rooms/v11</a>).</li>
+  <li><strong>v12</strong> — much bigger change. Room IDs are now a hash of
+  the <code>m.room.create</code> event rather than including a domain.
+  Introduces <em>room creators</em> as a formal concept (the create event's
+  <code>sender</code> plus any <code>additional_creators</code>); these
+  identities have infinite power level and cannot be demoted.
+  <code>m.room.create</code> is no longer included in any other event's
+  <code>auth_events</code>, and state resolution starts from an empty state
+  map instead of the unconflicted one
+  (<a href="https://spec.matrix.org/latest/rooms/v12/">rooms/v12</a>).</li>
+</ul>
+
+<p>Continuwuity's default <code>room_version</code> at the time of writing is
+v12. <strong>shape-rotator-matrix pins lobbies to v11 in
+<a href="https://github.com/Account-Link/shape-rotator-matrix/blob/main/knock-approver/approver.py">
+<code>approver.py:_create_lobby_room_raw</code></a>.</strong> Reason: rooms
+created at v12 produced cases where a federated user joining the room left
+the bot's local membership state desynced — <code>404</code> on
+<code>/rooms/{id}/state/m.room.member/{bot}</code>, then <code>403 Event is
+not authorized</code> on subsequent sends, then <code>M_NOT_FOUND</code> on
+<code>/join</code>. Pinning to v11 keeps the room firmly local-authoritative
+and uses the well-trodden federation path. Whether the underlying issue is
+in continuwuity's v12 implementation or in matrix.org's federated handling
+of v12 we haven't isolated; the pin is a stopgap, not a diagnosis.</p>
+
+<h2>2. End-to-end encryption</h2>
+
+<p>Matrix E2EE uses two cryptographic primitives layered on top of each other.
+You need both. The split exists because they solve different problems:</p>
+
+<table>
+<tr><th></th><th>Olm</th><th>Megolm</th></tr>
+<tr><th>Algorithm ID</th><td><code>m.olm.v1.curve25519-aes-sha2</code></td><td><code>m.megolm.v1.aes-sha2</code></td></tr>
+<tr><th>Topology</th><td>1:1 between two devices</td><td>1:N from one sender to many recipients</td></tr>
+<tr><th>Ratchet</th><td>Double Ratchet (Signal-style); forward secrecy + post-compromise security per message</td><td>Hash ratchet, sender-only; forward secrecy but no post-compromise security within a session</td></tr>
+<tr><th>Used for</th><td>To-device messages, especially carrying Megolm session keys</td><td>Room messages (<code>m.room.encrypted</code> events)</td></tr>
+<tr><th>Key sharing</th><td>Established by claiming a one-time key</td><td>Sender ships an <code>m.room_key</code> to each recipient device, Olm-wrapped</td></tr>
+<tr><th>Rotation</th><td>Continuous (Diffie-Hellman ratchet on every message exchange)</td><td>Triggered: time-based, message-count-based, or membership change</td></tr>
+</table>
+
+<p>You can think of Megolm as "I encrypt the symmetric session under the
+hash ratchet, and Olm is how I get that session into your device". Olm is
+expensive (asymmetric crypto per recipient) but produces a strong pairwise
+channel; Megolm is cheap (symmetric encryption) but its key has to be shipped
+out-of-band over Olm to every device that should see the room.</p>
+
+<h3>2.1 Device identity and keys</h3>
+
+<p>Every Matrix client session — every <code>device_id</code> — has its own
+identity:</p>
+
+<ul>
+  <li><strong>Ed25519 fingerprint key.</strong> Long-term signing key. Identifies
+  the device. Stays the same as long as the device exists.</li>
+  <li><strong>Curve25519 identity key.</strong> Long-term key used for ECDH
+  during Olm session establishment.</li>
+  <li><strong>One-time keys (OTKs).</strong> Short-lived Curve25519 keys
+  uploaded in batches. Each is consumed by one Olm session establishment, then
+  destroyed.</li>
+  <li><strong>Fallback key.</strong> A single Curve25519 key that's used when
+  OTKs are exhausted. Per spec, "the fallback key is not deleted once used,
+  but should be replaced when additional one-time keys are being uploaded"
+  (<a href="https://spec.matrix.org/latest/client-server-api/#one-time-and-fallback-keys">
+  client-server-api §One-time and fallback keys</a>). Without a fallback,
+  a sender that arrives after a recipient has burned all OTKs has no way to
+  initiate Olm. With one, the recipient gets a slightly weaker initial
+  session that's quickly upgraded by the ratchet.</li>
+</ul>
+
+<p>These all get uploaded via
+<a href="https://spec.matrix.org/latest/client-server-api/#post_matrixclientv3keysupload">
+<code>POST /_matrix/client/v3/keys/upload</code></a>. The OTK pool is
+replenished by the client on every <code>/sync</code>: the sync response
+includes a <code>device_one_time_keys_count</code> map, and clients top up
+to a target count (50 by default in matrix-rust-sdk).</p>
+
+<h3>2.2 Sending an encrypted message: end to end</h3>
+
+<p>This is the full path that the bug report below depends on. Suppose
+<code>@bot:hs-a</code> wants to send "hello" into a room shared with
+<code>@user:hs-b</code>. The bot has never sent in this room before.</p>
+
+<ol>
+  <li><strong>Determine recipients.</strong> Bot calls
+  <a href="https://spec.matrix.org/latest/client-server-api/#post_matrixclientv3keysquery">
+  <code>POST /keys/query</code></a> with <code>{"@user:hs-b": []}</code>.
+  hs-a federates this to hs-b if it doesn't already have a fresh device list
+  cached. Response: each device's signed device keys (Ed25519 + Curve25519
+  fingerprints) plus algorithm support.</li>
+
+  <li><strong>Establish Olm sessions per recipient device.</strong> For each
+  device the bot doesn't already have an Olm session with, it calls
+  <a href="https://spec.matrix.org/latest/client-server-api/#post_matrixclientv3keysclaim">
+  <code>POST /keys/claim</code></a>, which claims one OTK per (user, device).
+  hs-a federates this to hs-b, hs-b atomically pops one OTK from each
+  device's pool, returns it. Bot now has enough material to do an Olm
+  triple-DH and derive an initial Olm session.</li>
+
+  <li><strong>Create outbound Megolm session.</strong> Locally — no network.
+  Generate a fresh 32-byte ratchet seed; that's the session key. Compute
+  <code>session_id</code>. Create a fresh outbound session keyed on the
+  room.</li>
+
+  <li><strong>Wrap the Megolm key in Olm, per device.</strong> Build an
+  <code>m.room_key</code> payload:
+<pre><code>{
+  "algorithm": "m.megolm.v1.aes-sha2",
+  "room_id":   "!abc:hs-a",
+  "session_id":  "&lt;b64 ratchet pubkey&gt;",
+  "session_key": "&lt;b64 session-export-format key&gt;"
+}</code></pre>
+  Encrypt this with each recipient device's Olm session, producing one
+  Olm-encrypted blob per device. Pack them all into a single
+  <a href="https://spec.matrix.org/latest/client-server-api/#put_matrixclientv3sendtodeviceeventtypetxnid">
+  <code>PUT /_matrix/client/v3/sendToDevice/m.room.encrypted/{txn}</code></a>
+  request:
+<pre><code>{
+  "messages": {
+    "@user:hs-b": {
+      "ABCDEVICE": { "algorithm": "m.olm.v1.curve25519-aes-sha2", ... },
+      "XYZDEVICE": { "algorithm": "m.olm.v1.curve25519-aes-sha2", ... }
+    }
+  }
+}</code></pre>
+  </li>
+
+  <li><strong>hs-a forwards over federation.</strong> hs-a groups by destination
+  server and emits, in the next federation transaction to hs-b, an EDU:
+<pre><code>{
+  "edu_type": "m.direct_to_device",
+  "content": {
+    "sender":     "@bot:hs-a",
+    "type":       "m.room.encrypted",
+    "message_id": "&lt;random utf8 ≤ 32 codepoints&gt;",
+    "messages": {
+      "@user:hs-b": { "ABCDEVICE": { ... }, "XYZDEVICE": { ... } }
+    }
+  }
+}</code></pre>
+  Format per
+  <a href="https://spec.matrix.org/latest/server-server-api/#send-to-device-messaging">
+  server-server-api §Send-to-device messaging</a>: "an EDU that lets servers
+  push send events directly to a specific device on a remote server — for
+  instance, to maintain an Olm E2E encrypted message channel between a local
+  and remote device."</li>
+
+  <li><strong>hs-b enqueues per-device.</strong> hs-b unpacks, stores
+  per-device, ready to be served on the next <code>/sync</code> for
+  <code>@user:hs-b</code>. The <code>message_id</code> is for idempotence —
+  duplicates are dropped.</li>
+
+  <li><strong>Recipient syncs and decrypts.</strong> User's client gets the
+  Olm-wrapped <code>m.room.encrypted</code> in the <code>to_device</code>
+  block of <code>/sync</code>, decrypts it, sees the <code>m.room_key</code>,
+  installs an inbound Megolm session keyed on
+  <code>(room_id, sender_curve25519, session_id)</code>.</li>
+
+  <li><strong>Now the actual message.</strong> Bot encrypts "hello" with the
+  Megolm session, advances the ratchet, ships
+  <code>PUT /rooms/{roomId}/send/m.room.encrypted/{txn}</code>. This is a
+  PDU: durable, federated as part of the room DAG. Body looks like:
+<pre><code>{
+  "algorithm":  "m.megolm.v1.aes-sha2",
+  "sender_key": "&lt;bot device curve25519&gt;",
+  "device_id":  "BOTDEVICE",
+  "session_id": "&lt;same session_id as above&gt;",
+  "ciphertext": "AwgAEnA...&lt;b64&gt;..."
+}</code></pre></li>
+
+  <li><strong>Recipient decrypts.</strong> Looks up inbound session by
+  <code>session_id</code>, advances ratchet to the message index, decrypts.
+  Done.</li>
+</ol>
+
+<p>The point of laying it out this way is to make obvious where the bug
+lives. Step 5 — the <code>m.direct_to_device</code> EDU — is the only step
+in the chain that's ephemeral. Step 8, the actual message, is durable
+forever. So a federation hiccup that drops the EDU but lets the PDU through
+leaves the receiver with a forever-undecryptable message and no protocol-level
+signal that anything went wrong: hs-a's <code>/send/{txn}</code> got
+<code>200 OK</code>, hs-b stored the PDU, the EDU just vanished.</p>
+
+<h3>2.3 Megolm session rotation</h3>
+
+<p>Megolm sessions don't have post-compromise security: anyone who steals the
+ratchet state at message N can read all future messages N+1, N+2, ... until
+the session is rotated. So sessions get rotated.</p>
+
+<p>The trigger parameters are advertised in the room's
+<code>m.room.encryption</code> state event:</p>
+
+<pre><code>{
+  "algorithm": "m.megolm.v1.aes-sha2",
+  "rotation_period_ms":   604800000,   // 1 week, recommended default
+  "rotation_period_msgs": 100          // recommended default
+}</code></pre>
+
+<p>Defaults per
+<a href="https://spec.matrix.org/latest/client-server-api/#mroomencryption">
+client-server-api §m.room.encryption</a>: "How long the session should be used
+before changing it. <code>604800000</code> (a week) is the recommended
+default" / "How many messages should be sent before changing the session.
+<code>100</code> is the recommended default."</p>
+
+<p>In addition to those two, the spec requires rotation on <strong>device list
+changes</strong>: if a recipient device leaves, the existing session must be
+discarded so they can't decrypt future messages; if a new device joins, the
+sender must share the (current or new) session to it. matrix-rust-sdk
+implements both. The "leave" path is the security-critical one; the "join"
+path is just a key-share, no rotation needed in principle.</p>
+
+<p>What's missing from the spec, and what the bug exploits: there is
+<em>no</em> required rotation trigger for "the m.room_key I sent on session
+creation may not have been delivered." The protocol assumes either (a) the
+key got there, or (b) the recipient will request it via the gossip flow
+below.</p>
+
+<h3>2.4 Key gossip: m.room_key_request and m.forwarded_room_key</h3>
+
+<p>If a recipient gets an <code>m.room.encrypted</code> event whose
+<code>session_id</code> they don't have, they can ask. Per
+<a href="https://spec.matrix.org/latest/client-server-api/#key-requests">
+client-server-api §Key requests</a>: "When a device is missing keys to
+decrypt messages, it can request the keys by sending
+<code>m.room_key_request</code> to-device messages to other devices with
+action set to request. If a device wishes to share the keys with that device,
+it can forward the keys to the first device by sending an encrypted
+<code>m.forwarded_room_key</code> to-device message."</p>
+
+<p>This is the protocol-level recovery for "I missed an
+<code>m.room_key</code>". It works in theory. In practice, every implementation
+gates "willingness to forward" on cross-signing trust between the requesting
+device and some device that already has the key. The spec actively
+encourages this: "messages sent from non-cross-signed devices cannot be
+trusted and SHOULD NOT be displayed to the user. Clients have no assurance
+that encrypted messages sent from non-cross-signed devices were sent by the
+user, rather than an impersonator." So matrix-rust-sdk's default is: if the
+sender of the request isn't cross-signed by someone you trust, don't
+forward.</p>
+
+<p>For human Matrix users this is fine — you cross-sign your phone from your
+laptop. For bots it's the central operational headache. A bot that re-mints
+its login (which shape-rotator-matrix's self-heal does whenever the env token
+goes stale) gets a new <code>device_id</code>, hence a new device key set,
+hence is uncross-signed. Until it's manually verified, it can't recover keys
+via the gossip path. Its peers can't trust messages it sends. The cost of an
+uncross-signed bot is roughly:</p>
+
+<ul>
+  <li>It cannot recover keys it missed (no <code>m.forwarded_room_key</code>
+  will be sent to it);</li>
+  <li>Recipients can decrypt its messages but Element renders a "not verified
+  by its owner" warning;</li>
+  <li>Users can't verify the bot via SAS without the bot device first being
+  cross-signed.</li>
+</ul>
+
+<p><strong>Cross-signing footgun.</strong> If you write your own bootstrap (bots
+sometimes need to, since matrix-rust-sdk's bootstrap path requires
+interactive password handling), <em>do not use padded base64 in keyids</em>.
+Element's <code>userHasCrossSigningKeys</code> silently rejects the entire
+<code>master_keys</code> entry from <code>/keys/query</code> if any keyid has
+trailing <code>=</code>. Symptom: bot uploads keys fine, server stores them
+fine, federation serves them fine, peers see "Encrypted by a device not
+verified by its owner" forever. Confirmed via clean A/B in
+shape-rotator-matrix; documented in
+<a href="https://github.com/Account-Link/shape-rotator-matrix/blob/main/MATRIX_ONBOARDING.md">
+<code>MATRIX_ONBOARDING.md</code></a>.</p>
+
+<h3>2.5 Trust tiers</h3>
+
+<table>
+<tr><th>Tier</th><th>What it means</th><th>What it costs</th></tr>
+<tr>
+  <td><strong>Untrusted (TOFU)</strong></td>
+  <td>Device key seen for the first time, no cross-signing assertion</td>
+  <td>Element shows red shield. Key gossip won't forward to this device by
+  default. Messages decrypt OK if you have the session, but UI flags them.</td>
+</tr>
+<tr>
+  <td><strong>Cross-signed</strong></td>
+  <td>Some device this user has marked as their own master key has signed
+  this device's identity key</td>
+  <td>Element renders normally. Other clients of the same user will trust
+  this device automatically.</td>
+</tr>
+<tr>
+  <td><strong>Verified</strong></td>
+  <td>You (the requesting user) have personally verified this device or the
+  user's master key, typically via SAS or QR</td>
+  <td>Strongest tier. Required for some flows. Sticky across logouts.</td>
+</tr>
+</table>
+
+<p>The transitions: untrusted → cross-signed happens by the user signing
+their own device with their self-signing key, or by another verified user
+signing the master key with their user-signing key (in which case it's
+"transitively trusted" rather than verified). Cross-signed → verified
+requires explicit user action (SAS / QR / "I trust this device").</p>
+
+<h2>3. Federation</h2>
+
+<h3>3.1 Server discovery</h3>
+
+<p>Per
+<a href="https://spec.matrix.org/latest/server-server-api/#server-discovery">
+server-server-api §Server discovery</a>, resolving <code>server_name</code> to
+a network endpoint follows a priority order:</p>
+
+<ol>
+  <li>If <code>server_name</code> is an IP literal: connect to that IP, port
+  8448 unless overridden.</li>
+  <li>If a port is explicit in <code>server_name</code>: DNS-resolve the
+  hostname, connect to the specified port. No further delegation.</li>
+  <li>Otherwise, fetch <code>https://&lt;hostname&gt;/.well-known/matrix/server</code>.
+  If it returns <code>{"m.server": "delegated:port"}</code>, use that.
+  Cacheable up to 48h.</li>
+  <li>Otherwise, query SRV record <code>_matrix-fed._tcp.&lt;hostname&gt;</code>
+  (preferred since spec v1.8) or legacy <code>_matrix._tcp.&lt;hostname&gt;</code>.</li>
+  <li>Otherwise, A/AAAA on the hostname, port 8448.</li>
+</ol>
+
+<p>Operationally relevant point for dstack-hosted homeservers: dstack's
+gateway only exposes the configured port (in our case 6167), not 8448. So
+the well-known has to advertise <code>:443</code> as the federation endpoint
+(gateway TLS), not 8448. A misconfigured well-known produces
+"<code>Failed to find any key to satisfy: _FetchKeyRequest</code>" on the
+peer. <code>federationtester.matrix.org</code> caches failure results — after
+fixing well-known, expect a delay before re-tests succeed.</p>
+
+<h3>3.2 Server signing keys</h3>
+
+<p>Each homeserver publishes its current Ed25519 signing keys at
+<code>GET /_matrix/key/v2/server</code>. Response includes
+<code>verify_keys</code> (active), <code>old_verify_keys</code> (only valid
+for verifying historical events), <code>valid_until_ts</code>. Spec caps
+<code>valid_until_ts</code> at 7 days ahead.</p>
+
+<p>Peers can either fetch this directly or fetch via a <em>perspective</em> /
+<em>notary</em>: a third server they already trust, which countersigns the
+target's keys. <code>matrix.org</code> is the most common notary. Notary
+queries: <code>POST /_matrix/key/v2/query</code> or
+<code>GET /_matrix/key/v2/query/{serverName}</code>.</p>
+
+<h3>3.3 Federation transactions</h3>
+
+<p>The actual workhorse of federation:</p>
+
+<pre><code>PUT /_matrix/federation/v1/send/{txnId}
+{
+  "origin": "hs-a",
+  "origin_server_ts": 1715300000000,
+  "pdus": [&lt;up to 50 PDUs&gt;],
+  "edus": [&lt;up to 100 EDUs&gt;]
+}</code></pre>
+
+<p>Limits per
+<a href="https://spec.matrix.org/latest/server-server-api/#transactions">
+server-server-api §Transactions</a>: "max 50 PDUs", "max 100 EDUs". The
+sender retries with the same <code>txnId</code> until it gets a
+<code>200</code>; the receiver dedupes by <code>txnId</code>. Per-PDU errors
+are reported in the response body but do not fail the transaction:
+"the server is to use this response even in the event of one or more PDUs
+failing."</p>
+
+<p><strong>What 200 OK actually means.</strong> "We received your transaction
+and have begun processing." It does not mean "all your PDUs are accepted into
+the room" — they could still soft-fail on auth checks. It does not mean
+"your EDUs were delivered to recipients" — EDUs are best-effort and the
+receiver only commits to <em>processing</em> them, not to durability or
+delivery to clients. For PDUs, the soft-fail is at least observable on the
+next state pull. For EDUs, there's no protocol-level visibility at all.</p>
+
+<p>This is the load-bearing fact for the megolm bug: matrix-js-sdk's
+<code>sendToDevice</code> resolves on a <code>200</code> from
+<code>PUT /_matrix/client/v3/sendToDevice/...</code>, which on a federated
+recipient means "hs-a accepted it for forwarding," not "hs-b's user has it."
+There's a federation hop between those two states and no end-to-end ack.</p>
+
+<h3>3.4 Per-server federation queue</h3>
+
+<p>Each homeserver maintains a per-destination outgoing queue with retry/backoff.
+When hs-b is unreachable, hs-a accumulates pending PDUs and EDUs for hs-b
+and retries with exponential-ish backoff. continuwuity has its own
+implementation here — we have not read the source carefully enough to cite
+specific intervals — but the observable behavior is:</p>
+
+<ul>
+  <li>EDUs queued during a backoff window get bunched into a single
+  transaction when the queue drains. Order within a destination is preserved
+  within reasonable bounds.</li>
+  <li>If the queue grows unboundedly during a long outage, EDU losses become
+  possible: the queue may be capacity-bounded and drop oldest, or be purged
+  on restart, or get truncated on too many retries. We have observed
+  <code>m.direct_to_device</code> EDUs being dropped between matrix.org and
+  our continuwuity instance during periods where matrix.org's federation
+  queue for our server was backed up; the bug report linked at the bottom is
+  the careful follow-up.</li>
+  <li>Excessive homeserver restarts make this worse, not better. <strong>If
+  you restart conduwuit/continuwuity 6+ times in 5 hours, matrix.org's
+  federation queue for you may stick</strong> — recovery is "wait", not
+  "more restarts." We've burned an afternoon on this.</li>
+</ul>
+
+<h3>3.5 Remote join: make_join → send_join</h3>
+
+<p>When <code>@bob:hs-a</code> joins <code>!room:hs-b</code> for the first
+time, hs-a doesn't have the room state yet, so it can't sign a valid
+<code>m.room.member</code> event by itself.</p>
+
+<ol>
+  <li><code>GET /_matrix/federation/v1/make_join/{roomId}/{userId}</code> to
+  hs-b. hs-b returns an unsigned skeleton of the membership event with the
+  current room state's relevant <code>auth_events</code> filled in, plus the
+  room's <code>room_version</code>.</li>
+  <li>hs-a fills in the <code>sender</code>, signs it, sends back via
+  <code>PUT /_matrix/federation/v2/send_join/{roomId}/{eventId}</code>.</li>
+  <li>hs-b validates and replies with the room's full state at the moment of
+  join: <code>state</code>, <code>auth_chain</code>, optionally
+  <code>members_omitted</code> for the lazy-loaded join optimization.</li>
+</ol>
+
+<p>This is where "fast join" (continuwuity calls it that, matrix.org spec
+calls it "lazy member loading on join", v1.6+) kicks in: hs-a can ask hs-b to
+omit the full member list, joining quickly with partial state, then backfill
+later. Continuwuity uses fast-join for federated joins into
+<code>shared</code>-history rooms; the consequence is that for a brief
+window after the join, hs-a's view of the room state is incomplete. We've
+seen this manifest as <code>shortstatehash not found</code> errors on
+per-event visibility checks. Workaround in
+<code>shape-rotator-matrix</code>: pin lobby rooms to
+<code>history_visibility: world_readable</code>, which makes the visibility
+check a no-op.</p>
+
+<h2>4. Continuwuity-specific</h2>
+
+<p>Continuwuity is the active fork of conduwuit, which itself was a fork of
+Conduit. Single-binary Rust homeserver, RocksDB persistence. Aggressively
+small footprint: ~73MB RAM idle, RocksDB ~62MB after 10 days of light use on
+a 1.8GB CVM (measured in
+<a href="https://github.com/Account-Link/shape-rotator-matrix/blob/main/MATRIX_ONBOARDING.md">
+<code>MATRIX_ONBOARDING.md</code></a>).</p>
+
+<h3>4.1 Schema, defaults</h3>
+
+<ul>
+  <li>RocksDB schema version 18 at time of writing (spring 2026). Schema
+  migrations happen on startup. Migrations are forward-only — there's no
+  documented downgrade path — so test schema bumps in dev before deploying.</li>
+  <li>Default <code>room_version</code> for <code>createRoom</code> is v12.
+  As above, we pin lobbies to v11.</li>
+  <li>No <code>direct_tls</code> build by default. Continuwuity expects to
+  run behind a reverse proxy that terminates TLS; that proxy is what speaks
+  port 8448 to peers. <span class="uncertain">Verified empirically — the
+  federation harness needs an nginx in front of each homeserver to actually
+  do federation over TLS.</span> The cargo features for direct TLS exist
+  but are not the default and are not in the published image. Practical
+  consequence: any federation testing harness needs an nginx (or similar)
+  TLS frontend.</li>
+</ul>
+
+<h3>4.2 Registration tokens</h3>
+
+<p>The <code>CONDUWUIT_REGISTRATION_TOKEN</code> environment variable is
+used at <strong>first boot only</strong> to seed the database. After that,
+the value is in the DB; changing the env var has no effect. To rotate
+the registration token you have to either:</p>
+
+<ul>
+  <li>Use the admin command (<code>!admin server register-token ...</code>)
+  via the admin room, which sets a new token in the DB; or</li>
+  <li>Wipe the data volume and reboot, in which case the env var seeds the
+  fresh DB.</li>
+</ul>
+
+<p>This bites in CI: a harness that rebuilds containers reuses the data
+volume by default and so stays on the original (often-stale) token, even
+though the env says otherwise. For our federation-repro harness we run with
+a fresh per-test data volume to avoid this.</p>
+
+<h3>4.3 Admin command surface gaps</h3>
+
+<p>Continuwuity 0.5.7's <code>rooms moderation</code> admin command surface,
+probed via <code>conduwuit --execute "rooms moderation help"</code>:</p>
+
+<pre><code>admin rooms moderation:
+  ban-room
+  ban-list-of-rooms
+  unban-room
+  list-banned-rooms</code></pre>
+
+<p>What's missing relative to Synapse:</p>
+
+<ul>
+  <li>No <code>purge_history</code> equivalent. No "delete events older than
+  T" or "delete events up to event ID" admin operation. The only mass-cleanup
+  tool is <code>ban-room</code>, which is functionally a room delete:
+  everyone gets evicted, federation severed, room unrecoverable.</li>
+  <li>No per-event admin delete (Synapse has
+  <code>DELETE /_synapse/admin/v1/rooms/{roomId}/events/{eventId}</code>).</li>
+  <li>No "delete all events from user X" command.</li>
+</ul>
+
+<p>For redaction-based cleanup you fall back to the public client API
+<code>PUT /rooms/{roomId}/redact/{eventId}/{txnId}</code>, paginating with
+<code>/messages?dir=b</code>. continuwuity's default rate limit on
+<code>/redact</code> caps you at ~3.5/s in our measurements even when the
+admin token bypasses per-user limits — the rate limit on this endpoint
+appears to be enforced at a different layer. Cleaning up a 600K-event
+self-DOS this way takes hours; see the May 9 incident retro.</p>
+
+<h3>4.4 Admin tokens bypass per-user rate limits</h3>
+
+<p>Like Synapse, continuwuity exempts users with the admin role from
+<code>rc_message</code> per-user rate limits. This is convenient for ops
+(force-leave, createRoom, reset-password) but turns any buggy send-loop on
+an admin-tokened bot into a server-saturating flood, since there's no
+self-throttle. <strong>Don't <code>/send</code> as an admin if a non-admin
+identity would do.</strong> Refactor outbound message paths onto a separate
+non-admin bot identity; reserve the admin token for admin API calls. We're
+mid-migration on this in shape-rotator-matrix.</p>
+
+<h3>4.5 Bot self-heal pattern</h3>
+
+<p>shape-rotator-matrix bots check at every boot whether their env-supplied
+access token still validates against <code>/account/whoami</code>. If not,
+they re-mint via <code>/login</code> with a password persisted to
+<code>/data/&lt;bot&gt;_password</code>, and (since PR #37) reuse the same
+<code>device_id</code> they had before. Reusing the device ID is critical:
+the crypto store (<code>bot_crypto.db</code> for mautrix-python,
+<code>matrix-crypto-snapshot.json</code> for matrix-js-sdk) is keyed on
+<code>(mxid, device_id)</code> and a fresh device ID forces a wipe. Wipe →
+new uncross-signed device → "Unable to decrypt" wall on every recipient
+client.</p>
+
+<p>Self-heal works as a recovery mechanism but turns every stale-token
+deploy into an E2EE migration event. The right operational discipline is
+"validate the token with <code>whoami</code> before pushing env updates"
+— easy to forget, and the price of forgetting is high.</p>
+
+<h2>5. The bug as worked example</h2>
+
+<p>Now we can describe the production incident at every layer above without
+losing precision.</p>
+
+<p><strong>Scenario.</strong> <code>@router-bot</code> on hs-a sends regularly
+into an encrypted room shared with <code>@user:hs-b</code>. Federation between
+hs-a and hs-b is healthy under normal load. matrix.org's federation queue
+for hs-a backs up due to repeated restarts of hs-a (six in five hours, in
+production); during the backup window, some <code>m.direct_to_device</code>
+EDUs are dropped (not retried, or aged out of the queue).</p>
+
+<p><strong>Trigger event.</strong> The bot's outbound megolm session for the
+room expires (<code>rotation_period_ms</code>, or membership change, or device
+add). Bot creates a fresh outbound megolm session — purely local, no network.
+Bot does the work of §2.2 step 4: build <code>m.room_key</code>, Olm-wrap per
+recipient device, ship via <code>PUT /sendToDevice</code>. hs-a enqueues for
+hs-b. hs-a returns <code>200</code> to the bot.</p>
+
+<p><strong>The hop that fails.</strong> hs-a includes the
+<code>m.direct_to_device</code> EDU in its next federation transaction to
+matrix.org's destination server. Either the transaction itself fails and the
+EDU is in the retry queue, or the transaction succeeds but matrix.org's
+federation queue for the user's server is backed up and the EDU gets dropped
+during a queue-purge / restart / capacity-eviction event. Either way: the
+recipient device never sees the <code>m.room_key</code>.</p>
+
+<p>From matrix-js-sdk's perspective, the call to <code>sendToDevice</code>
+returned <code>200</code>. There is no protocol mechanism by which the
+sender will learn this delivery failed. The outbound session is cached and
+will be reused for every subsequent message in the room.</p>
+
+<p><strong>The PDU still flows.</strong> The bot sends an
+<code>m.room.encrypted</code> with the actual content (§2.2 step 8). This is
+a PDU — durable, federated as part of the room DAG, not subject to the same
+queue dropouts as EDUs. matrix.org's server-server queue will retry this
+indefinitely until it lands. So the recipient gets the encrypted message but
+does not have the session to decrypt it.</p>
+
+<p><strong>No automatic recovery.</strong> The recipient could in theory send
+an <code>m.room_key_request</code> (§2.4). matrix-rust-sdk does have this
+flow, and it would work — but only against devices the recipient has
+cross-signing trust in. Bots running fresh re-mints (§4.5) are uncross-signed.
+The request is silently ignored. The room stays broken.</p>
+
+<p>The sender could in theory rotate the megolm session and re-share. But
+matrix-rust-sdk's default <code>rotation_period_ms</code> is 7 days; nothing
+in the spec or in the SDK triggers rotation on "I noticed I just had a
+federation hiccup." matrix-js-sdk doesn't auto-rotate on connection recovery
+either. So absent operator intervention, the room stays broken indefinitely.</p>
+
+<p><strong>The patch (and why it isn't enough yet).</strong> Hermes' Router
+has an <code>installMegolmAutoRotation</code> path that fires
+<code>forceDiscardSession</code> on every encrypted room either periodically
+(default 4h) or on detected sync recovery. The intent is: when federation
+hiccups, force a fresh session and a fresh <code>m.room_key</code>
+distribution — which will succeed assuming federation is now healthy. In
+testing, the patch fires as designed but the harness shows the room
+<em>still</em> doesn't decrypt after rotation, suggesting the underlying
+Olm sessions to the recipient devices may also be wedged from the federation
+window. Open hypothesis. See
+<a href="matrix-megolm-rotation-bug.html">matrix-megolm-rotation-bug.html</a>
+for the harness, the current PR status, and the next things to try.</p>
+
+<h2>Sources and uncertainties</h2>
+
+<p>Where I cited the spec, I pulled it from
+<a href="https://spec.matrix.org/latest/">spec.matrix.org/latest</a>
+directly, against the v1.18 snapshot. Megolm internal structure quotes are
+from the <a href="https://gitlab.matrix.org/matrix-org/olm/-/blob/master/docs/megolm.md">olm
+repo's megolm.md</a>.</p>
+
+<p>Things I did not verify in source code and have flagged in-line:</p>
+
+<ul>
+  <li>Continuwuity's federation queue retry/backoff intervals. We see the
+  queue back up in production but I haven't read the rust source to extract
+  the actual numbers; cite this carefully.</li>
+  <li>RocksDB schema 18 — current as of spring 2026, may have moved by the
+  time you read this.</li>
+  <li><code>direct_tls</code> being absent from the published continuwuity
+  image is verified empirically by the federation harness needing nginx,
+  not by reading the cargo feature list.</li>
+  <li>State-resolution-v2 differences for v12 are summarized from the v12
+  spec page; I have not implemented or stress-tested the new algorithm.</li>
+</ul>
+
+<footer>
+  Companion to
+  <a href="matrix-megolm-rotation-bug.html">matrix-megolm-rotation-bug.html</a>
+  and the shape-rotator-matrix incident retro
+  <a href="https://github.com/Account-Link/shape-rotator-matrix/blob/main/docs/incidents/2026-05-09-announce-flood.md">
+  2026-05-09-announce-flood</a>. Corrections welcome via PR or DM
+  (<code>@socrates1024:matrix.org</code>).
+</footer>
+
+</body>
+</html>
