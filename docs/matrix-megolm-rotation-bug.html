@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matrix federation megolm rotation bug — notes &amp; repro</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --bg: #fafafa;
+    --rule: #d8d8d8;
+    --code-bg: #f1efe9;
+    --accent: #7a2c2c;
+  }
+  html { background: var(--bg); }
+  body {
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    max-width: 760px;
+    margin: 2.5rem auto 4rem;
+    padding: 0 1.25rem;
+  }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; line-height: 1.2; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .6rem; padding-top: .8rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
+  p, li { margin: .5rem 0; }
+  ul { padding-left: 1.4rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
+  pre {
+    background: var(--code-bg);
+    padding: .75rem .9rem;
+    border-radius: 4px;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  pre code { background: transparent; padding: 0; font-size: inherit; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.2rem; }
+  .tldr {
+    border-left: 3px solid var(--accent);
+    padding: .5rem .9rem;
+    background: #fff;
+    margin: 1rem 0 1.5rem;
+  }
+  .tldr p { margin: .25rem 0; }
+  .status {
+    display: inline-block;
+    background: #fff3d4;
+    border: 1px solid #d9b65b;
+    color: #6b4a08;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  a { color: var(--accent); }
+  footer { margin-top: 3rem; font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: .8rem; }
+</style>
+</head>
+<body>
+
+<h1>Matrix federation megolm rotation bug</h1>
+<div class="meta">
+  Andrew Miller (<a href="https://github.com/amiller">@amiller</a> /
+  <code>@socrates1024:matrix.org</code>) &middot; first written 2026-05-10 &middot;
+  <span class="status">draft</span>
+</div>
+
+<div class="tldr">
+  <p><strong>TL;DR.</strong> A federation hiccup that drops an <code>m.room_key</code>
+  to-device EDU leaves a Matrix bot sending forever to a room whose recipients
+  have no key. matrix-js-sdk doesn't retry, matrix-rust-sdk doesn't auto-rotate.
+  The repro harness reproduces this exactly; a periodic <code>forceDiscardSession</code>
+  patch fires but does not actually unwedge the room.</p>
+</div>
+
+<h2>Origin</h2>
+
+<p>Came out of an admin-room flood incident on the Account-Link Matrix homeserver
+on 2026-05-09. Full retro:
+<a href="https://github.com/Account-Link/shape-rotator-matrix/blob/main/docs/incidents/2026-05-09-announce-flood.md"><code>docs/incidents/2026-05-09-announce-flood.md</code></a>
+in <code>Account-Link/shape-rotator-matrix</code>. The flood (a separate
+application-logic bug) was loud because the bot's device had been rotated by a
+self-heal earlier in the day, so peers couldn't decrypt anything it sent. That
+recovery from the rotation never happened on its own — the same pattern we'd
+seen once before with <code>claw-teedah-2</code> versus Router during a
+matrix.org federation queue backoff. This page is the breakdown of <em>that</em>
+sub-bug, separated from the day-of incident.</p>
+
+<h2>The bug mechanism</h2>
+
+<p>Sender side (matrix-js-sdk, Router):</p>
+<ol>
+  <li>Bot creates a fresh outbound megolm session for an encrypted room.</li>
+  <li>Bot olm-wraps an <code>m.room_key</code> (carrying that megolm session's
+  ratchet seed) per recipient device, ships them as
+  <code>m.direct_to_device</code> EDUs in the next federation
+  <code>PUT /send/{txn}</code>.</li>
+  <li>Federation peer returns 200. To matrix-js-sdk this means "delivered".</li>
+  <li>Bot caches the outbound session and reuses it for every subsequent
+  <code>m.room.encrypted</code> in that room.</li>
+</ol>
+
+<p>What can go wrong: the peer accepts the transaction (200) but the to-device
+EDU never makes it into the recipient HS's queue — dropped by an intermediary,
+mangled by federation backoff, lost during a queue-purge window. Once that 200
+is observed, matrix-js-sdk has no retry path. The session stays cached and
+broken.</p>
+
+<p>Receiver side (matrix-rust-sdk, peer): no megolm key arrives, every
+<code>m.room.encrypted</code> from this sender fails with <code>megolm — no
+session key</code>. matrix-rust-sdk does have a recovery flow (request keys
+from sender, accept reshare), but it's gated on cross-signing trust between
+the two devices. Bots running fresh re-mints don't have cross-signing set up,
+so that recovery silently no-ops.</p>
+
+<p>Net result: the bot sends to that room indefinitely; the peer sees a wall of
+undecryptable events; nothing on either side will fix it without an external
+nudge.</p>
+
+<h2>Repro harness</h2>
+
+<p>Lives at <code>tests/federation-repro/</code> in
+<a href="https://github.com/jameslbarnes/teleport-router/pull/31"><code>jameslbarnes/teleport-router#31</code></a>
+(currently <strong>draft</strong>). Architecture:</p>
+
+<pre><code>peer query hs-a:8448 ──TLS──▶ hs-a (nginx) ──HTTP──▶ hs-a-core (continuwuity :6167)
+peer query hs-b:8448 ──TLS──▶ hs-b (nginx) ──HTTP──▶ hs-b-core (continuwuity :6167)</code></pre>
+
+<p>Two continuwuity homeservers, shared self-signed CA, federation between them
+over TLS. The <code>hs-b</code> proxy is an HTTP MITM that can be flipped
+between pass-through and "drop all <code>m.direct_to_device</code> EDUs" via an
+env var.</p>
+
+<p>Drivers:</p>
+<ul>
+  <li><code>repro/bot.ts</code> — uses Router's actual <code>MatrixPlatform</code>
+  (matrix-js-sdk + rust-crypto), CLI over stdin: <code>create-room</code>,
+  <code>invite</code>, <code>send</code>, <code>rotate</code>, <code>exit</code>.</li>
+  <li><code>repro/user.py</code> — matrix-nio user on hs-b, prints
+  <code>{"event":"decrypt_ok","body":...}</code> or <code>"decrypt_fail"</code> per
+  inbound encrypted event.</li>
+  <li><code>scripts/run-bug.sh</code> — orchestrates the full scenario below.</li>
+</ul>
+
+<h3>Scenario, from <code>scripts/run-bug.sh</code></h3>
+<ol>
+  <li>baseline: bot sends <code>baseline-ping</code>, user decrypts ok.</li>
+  <li>arm MITM (drop <code>m.direct_to_device</code>).</li>
+  <li><code>forceDiscardSession</code> on bot, send <code>stuck-1</code>: fresh
+  outbound megolm session, its <code>m.room_key</code> EDU is dropped by the
+  MITM, the <code>m.room.encrypted</code> still reaches the user.</li>
+  <li>send <code>stuck-2</code> reusing the same broken session.</li>
+  <li>disarm MITM.</li>
+  <li>send <code>post-restore</code> reusing the broken session — federation is
+  healthy again but matrix-rust-sdk has nothing to retry, since matrix-js-sdk
+  thinks the key was delivered.</li>
+  <li>wait past the periodic-rotation interval (compressed to 8s for the test).</li>
+  <li>send <code>after-rotation</code>.</li>
+</ol>
+
+<h2>What the repro shows</h2>
+
+<h3>Without the fix</h3>
+<p>(<code>FIX=disabled bash scripts/run-bug.sh</code>, sets
+<code>MATRIX_DISABLE_MEGOLM_AUTOROTATE=1</code>):</p>
+
+<pre><code>[run-bug] step 1: baseline
+  ✓ baseline decrypt_ok
+[run-bug] step 2: arm MITM (drop all to-device — m.room_key is olm-wrapped inside)
+[run-bug] step 3: bot rotates session, sends stuck-1
+  ✓ stuck-1 NOT decrypted (m.room_key was dropped by MITM)
+[run-bug] step 4: send stuck-2 (same broken session)
+  ✓ stuck-2 also undecryptable
+[run-bug] step 5: disarm MITM (federation healthy again)
+[run-bug] step 6: send post-restore (still using broken session)
+  ✓ BUG REPRODUCED — post-restore still undecryptable on the broken session
+[run-bug] step 7: wait 12s — past the bot's periodic rotation interval (8s)
+[run-bug] step 8: send after-rotation
+  ✓ FIX_DISABLED: after-rotation undecryptable (no auto-rotation, broken session reused)
+
+[run-bug] ✅ WITHOUT FIX: bug PERSISTS — outbound session stays broken indefinitely</code></pre>
+
+<p>User-side decrypt failures keep accumulating after federation has healed:</p>
+<pre><code>{"event": "decrypt_fail", "reason": "megolm — no session key", "sender": "@repro-bot:hs-a"}
+{"event": "decrypt_fail", "reason": "megolm — no session key", "sender": "@repro-bot:hs-a"}
+{"event": "decrypt_fail", "reason": "megolm — no session key", "sender": "@repro-bot:hs-a"}</code></pre>
+
+<p>This matches production: the room stays broken with no automatic recovery.</p>
+
+<h3>With the fix</h3>
+<p>The patch (<code>installMegolmAutoRotation</code> in
+<code>server/src/platform/matrix.ts</code>) installs two triggers:</p>
+<ul>
+  <li>a sync-recovery hook on <code>ClientEvent.Sync</code> that fires when the
+  state transitions back into <code>SYNCING</code> from a non-syncing state;</li>
+  <li>a periodic <code>setInterval</code> (default 4h, compressed for tests).</li>
+</ul>
+
+<p>Both call <code>rotateAllOutboundMegolmSessions</code>, which loops every
+encrypted room and calls <code>crypto.forceDiscardSession(roomId)</code>.</p>
+
+<p>The patch <em>does</em> fire as designed — bot.out shows both Router's log
+lines and matrix-js-sdk's internal log:</p>
+
+<pre><code>[Matrix] megolm auto-rotation installed (every 8s + on sync recovery)
+...
+[!9zEhL2yftkgQP9C3Z0u1kMV_BscGhxOP9lXji8aSq_Y encryption] Discarded existing group session
+[Matrix] discarded 15 outbound megolm session(s)
+[!9zEhL2yftkgQP9C3Z0u1kMV_BscGhxOP9lXji8aSq_Y encryption] Discarded existing group session
+[Matrix] discarded 15 outbound megolm session(s)</code></pre>
+
+<p>But the user still can't decrypt the <code>after-rotation</code> message.
+<code>forceDiscardSession</code> evicts the cached outbound megolm session, so
+the next send creates a fresh one — and presumably re-distributes a fresh
+<code>m.room_key</code>. That should work, but in the harness it doesn't.</p>
+
+<p>Conclusion: the patch as written needs more work before it can be merged.
+PR #31 stays draft.</p>
+
+<h2>Hypotheses for the next iteration</h2>
+
+<ul>
+  <li><strong>Olm session refresh.</strong> Maybe the underlying olm sessions
+  with the recipient devices are themselves wedged from the MITM window. A
+  <code>/keys/claim</code> for users in the room should force fresh
+  one-time-keys and new olm sessions, after which a re-share can ride a
+  channel that actually works. Worth trying before the discard.</li>
+  <li><strong>Active reshare.</strong> Look for a public path equivalent to
+  matrix-rust-sdk's <code>shareGroupSession</code> — push the session keys
+  out without waiting for the next encrypted message to trigger key
+  distribution. A discard-then-share-explicitly may behave differently from
+  discard-then-rely-on-next-send.</li>
+  <li><strong>Device-list re-validation.</strong> If matrix-js-sdk's cached
+  device list for the room is also stale after a federation hiccup, the
+  reshare might target the wrong device set. Force a device-list reload before
+  rotating.</li>
+</ul>
+
+<p>None of these are confirmed yet — they're the next things to try.</p>
+
+<h2>Status</h2>
+
+<p>PR <a href="https://github.com/jameslbarnes/teleport-router/pull/31">#31</a>
+stays draft. Production
+(<code>shape-rotator-matrix</code> CVM) currently runs without the patch;
+manual device rotation has been the workaround. The harness is reproducible
+locally with <code>docker compose</code> + <code>bash scripts/run-bug.sh</code>.</p>
+
+<footer>
+  This is a notes-as-they-emerge log, not a tutorial; expect rough edges.
+  Source files referenced above:
+  <code>tests/federation-repro/scripts/run-bug.sh</code>,
+  <code>server/src/platform/matrix.ts</code>,
+  <code>docs/incidents/2026-05-09-announce-flood.md</code>.
+</footer>
+
+</body>
+</html>
