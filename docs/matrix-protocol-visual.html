@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matrix protocol &amp; continuwuity — visual companion</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --bg: #fafafa;
+    --rule: #d8d8d8;
+    --code-bg: #f1efe9;
+    --accent: #7a2c2c;
+    --bug: #c0392b;
+  }
+  html { background: var(--bg); }
+  body {
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    max-width: 980px;
+    margin: 2.5rem auto 4rem;
+    padding: 0 1.25rem;
+  }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; line-height: 1.2; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .6rem; padding-top: .8rem; border-top: 1px solid var(--rule); }
+  h3 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
+  p, li { margin: .5rem 0; }
+  ul { padding-left: 1.4rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  code { background: var(--code-bg); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
+  .meta { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.2rem; }
+  .tldr {
+    border-left: 3px solid var(--accent);
+    padding: .5rem .9rem;
+    background: #fff;
+    margin: 1rem 0 1.5rem;
+  }
+  .tldr p { margin: .25rem 0; }
+  .status {
+    display: inline-block;
+    background: #fff3d4;
+    border: 1px solid #d9b65b;
+    color: #6b4a08;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  a { color: var(--accent); }
+  figure { margin: 1.2rem 0 1.6rem; }
+  figcaption { color: var(--muted); font-size: 0.9rem; margin-top: .35rem; }
+  .diagram {
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: .9rem;
+  }
+  .diagram svg { display: block; width: 100%; height: auto; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .cheatsheet {
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: .9rem 1.1rem;
+    font-size: 0.93rem;
+  }
+  .cheatsheet ul { margin: .25rem 0; }
+  .cheatsheet li { margin: .25rem 0; }
+  .legend { font-size: 0.85rem; color: var(--muted); margin-top: .35rem; }
+  .legend span { display: inline-block; margin-right: 1rem; }
+  .legend i { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin-right: .35rem; border-radius: 2px; }
+  footer { margin-top: 3rem; font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: .8rem; }
+</style>
+</head>
+<body>
+
+<h1>Matrix protocol &amp; continuwuity — visual companion</h1>
+<div class="meta">
+  Andrew Miller (<a href="https://github.com/amiller">@amiller</a> /
+  <code>@socrates1024:matrix.org</code>) &middot; 2026-05-10 &middot;
+  <span class="status">draft</span>
+</div>
+
+<div class="tldr">
+  <p><strong>What this is.</strong> Diagrams for the same content as
+  <a href="matrix-protocol.html">matrix-protocol.html</a>. Glance to see the
+  shape; click through to the essay for prose. The bug
+  (<a href="matrix-megolm-rotation-bug.html">matrix-megolm-rotation-bug.html</a>)
+  lives at the EDU layer and the trust-tier layer; both are visible below.</p>
+</div>
+
+<h2>1. Encrypted send path, end to end</h2>
+
+<p>What actually happens between "<code>sendMessage('hello')</code>" and
+"<code>'hello'</code> rendered in the recipient's client". Steps numbered
+match §2.2 of the essay. The dotted EDU hop is where the bug lives.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 920 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Encrypted send path end to end">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+    <marker id="arrRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <!-- Lane labels -->
+  <text x="120" y="24" text-anchor="middle" font-size="13" font-weight="600">bot @ hs-a</text>
+  <text x="370" y="24" text-anchor="middle" font-size="13" font-weight="600">hs-a (sender HS)</text>
+  <text x="620" y="24" text-anchor="middle" font-size="13" font-weight="600">hs-b (recipient HS)</text>
+  <text x="845" y="24" text-anchor="middle" font-size="13" font-weight="600">@user device</text>
+
+  <!-- Lane separators -->
+  <line x1="240" y1="34" x2="240" y2="540" stroke="#d8d8d8" stroke-dasharray="2 4"/>
+  <line x1="490" y1="34" x2="490" y2="540" stroke="#d8d8d8" stroke-dasharray="2 4"/>
+  <line x1="740" y1="34" x2="740" y2="540" stroke="#d8d8d8" stroke-dasharray="2 4"/>
+
+  <!-- Step 1 -->
+  <g>
+    <circle cx="40" cy="65" r="11" fill="#7a2c2c"/>
+    <text x="40" y="69" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">1</text>
+    <text x="60" y="60" font-size="12">/keys/query</text>
+    <text x="60" y="75" font-size="11" fill="#555">fetch device list for @user</text>
+    <line x1="120" y1="68" x2="615" y2="68" stroke="#1a1a1a" stroke-width="1" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Step 2 -->
+  <g>
+    <circle cx="40" cy="115" r="11" fill="#7a2c2c"/>
+    <text x="40" y="119" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">2</text>
+    <text x="60" y="110" font-size="12">/keys/claim</text>
+    <text x="60" y="125" font-size="11" fill="#555">consume one-time-key per recipient device</text>
+    <line x1="120" y1="118" x2="615" y2="118" stroke="#1a1a1a" stroke-width="1" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Step 3 (local on bot) -->
+  <g>
+    <circle cx="40" cy="170" r="11" fill="#7a2c2c"/>
+    <text x="40" y="174" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">3</text>
+    <rect x="60" y="155" width="160" height="32" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+    <text x="140" y="170" text-anchor="middle" font-size="11">create outbound megolm</text>
+    <text x="140" y="183" text-anchor="middle" font-size="11" fill="#555">(local, no network)</text>
+  </g>
+
+  <!-- Step 4 (olm-wrap m.room_key per device) -->
+  <g>
+    <circle cx="40" cy="225" r="11" fill="#7a2c2c"/>
+    <text x="40" y="229" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">4</text>
+    <rect x="60" y="210" width="160" height="32" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+    <text x="140" y="225" text-anchor="middle" font-size="11">olm-wrap m.room_key</text>
+    <text x="140" y="238" text-anchor="middle" font-size="11" fill="#555">per recipient device</text>
+  </g>
+
+  <!-- Step 5: PUT /sendToDevice -->
+  <g>
+    <circle cx="40" cy="280" r="11" fill="#7a2c2c"/>
+    <text x="40" y="284" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">5</text>
+    <text x="60" y="275" font-size="12">PUT /sendToDevice/m.room.encrypted</text>
+    <text x="60" y="290" font-size="11" fill="#555">200 OK = "hs-a accepted for forwarding"</text>
+    <line x1="120" y1="283" x2="365" y2="283" stroke="#1a1a1a" stroke-width="1" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Step 6: federation EDU - the bug hop -->
+  <g>
+    <circle cx="370" cy="335" r="11" fill="#c0392b"/>
+    <text x="370" y="339" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">6</text>
+    <text x="385" y="325" font-size="12" fill="#c0392b">federation EDU: m.direct_to_device</text>
+    <text x="385" y="340" font-size="11" fill="#c0392b">PUT /federation/v1/send/{txn} — ephemeral, best-effort</text>
+    <line x1="385" y1="350" x2="615" y2="350" stroke="#c0392b" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrRed)"/>
+  </g>
+
+  <!-- Step 7: hs-b enqueues for device -->
+  <g>
+    <circle cx="620" cy="395" r="11" fill="#7a2c2c"/>
+    <text x="620" y="399" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">7</text>
+    <text x="635" y="390" font-size="12">hs-b enqueues per device</text>
+    <text x="635" y="403" font-size="11" fill="#555">delivered on next /sync to @user device</text>
+    <line x1="635" y1="412" x2="820" y2="412" stroke="#1a1a1a" stroke-width="1" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Step 8: PDU send -->
+  <g>
+    <circle cx="40" cy="450" r="11" fill="#7a2c2c"/>
+    <text x="40" y="454" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">8</text>
+    <text x="60" y="445" font-size="12">PUT /rooms/{id}/send/m.room.encrypted</text>
+    <text x="60" y="460" font-size="11" fill="#555">PDU — durable, federated as part of room DAG</text>
+    <line x1="120" y1="453" x2="820" y2="453" stroke="#1a1a1a" stroke-width="1" marker-end="url(#arr)"/>
+  </g>
+
+  <!-- Step 9: decrypt -->
+  <g>
+    <circle cx="845" cy="500" r="11" fill="#7a2c2c"/>
+    <text x="845" y="504" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">9</text>
+    <text x="745" y="500" text-anchor="end" font-size="12">decrypt with megolm session</text>
+    <text x="745" y="514" text-anchor="end" font-size="11" fill="#555">requires session installed at step 7</text>
+  </g>
+
+  <!-- Bug call-out -->
+  <rect x="385" y="525" width="320" height="22" fill="#fff" stroke="#c0392b" rx="3"/>
+  <text x="395" y="540" font-size="11" fill="#c0392b">red hop = EDU; if dropped, step 9 fails forever</text>
+</svg>
+</figure>
+<p class="legend">
+  <span><i style="background:#7a2c2c"></i>protocol step</span>
+  <span><i style="background:#c0392b"></i>ephemeral / fragile</span>
+  <span><i style="background:#f1efe9;border:1px solid #d8d8d8"></i>local op</span>
+</p>
+
+<h2>2. Olm vs Megolm at a glance</h2>
+
+<p>m.room_key is a megolm seed; it travels olm-wrapped on a to-device EDU.
+That sentence is the whole relationship.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Olm vs Megolm comparison">
+  <!-- Olm column -->
+  <rect x="20" y="20" width="400" height="320" fill="#fff" stroke="#d8d8d8" rx="4"/>
+  <text x="220" y="48" text-anchor="middle" font-size="14" font-weight="700">Olm</text>
+  <text x="220" y="66" text-anchor="middle" font-size="11" fill="#555">m.olm.v1.curve25519-aes-sha2</text>
+
+  <!-- Olm: 1:1 picture -->
+  <circle cx="100" cy="130" r="22" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="100" y="135" text-anchor="middle" font-size="11">A</text>
+  <circle cx="340" cy="130" r="22" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="340" y="135" text-anchor="middle" font-size="11">B</text>
+  <line x1="125" y1="125" x2="315" y2="125" stroke="#1a1a1a" marker-end="url(#a1)"/>
+  <line x1="315" y1="135" x2="125" y2="135" stroke="#1a1a1a" marker-end="url(#a1)"/>
+  <text x="220" y="115" text-anchor="middle" font-size="11" fill="#555">double ratchet (Signal-style)</text>
+
+  <text x="40" y="190" font-size="12" font-weight="600">topology</text>
+  <text x="160" y="190" font-size="12">1:1, pairwise per device</text>
+  <text x="40" y="215" font-size="12" font-weight="600">forward sec</text>
+  <text x="160" y="215" font-size="12">yes</text>
+  <text x="40" y="240" font-size="12" font-weight="600">post-comp sec</text>
+  <text x="160" y="240" font-size="12">yes (DH ratchet)</text>
+  <text x="40" y="265" font-size="12" font-weight="600">used for</text>
+  <text x="160" y="265" font-size="12">to-device messages</text>
+  <text x="40" y="290" font-size="12" font-weight="600">key-share</text>
+  <text x="160" y="290" font-size="12">claim a one-time key</text>
+  <text x="40" y="315" font-size="12" font-weight="600">cost</text>
+  <text x="160" y="315" font-size="12">expensive (asym/recip)</text>
+
+  <!-- Megolm column -->
+  <rect x="480" y="20" width="400" height="320" fill="#fff" stroke="#d8d8d8" rx="4"/>
+  <text x="680" y="48" text-anchor="middle" font-size="14" font-weight="700">Megolm</text>
+  <text x="680" y="66" text-anchor="middle" font-size="11" fill="#555">m.megolm.v1.aes-sha2</text>
+
+  <!-- Megolm: 1:N picture -->
+  <circle cx="560" cy="130" r="22" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="560" y="135" text-anchor="middle" font-size="11">S</text>
+  <circle cx="730" cy="100" r="16" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="730" y="105" text-anchor="middle" font-size="10">r1</text>
+  <circle cx="760" cy="135" r="16" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="760" y="140" text-anchor="middle" font-size="10">r2</text>
+  <circle cx="730" cy="170" r="16" fill="#f1efe9" stroke="#7a2c2c"/>
+  <text x="730" y="175" text-anchor="middle" font-size="10">r3</text>
+  <line x1="582" y1="120" x2="715" y2="105" stroke="#1a1a1a" marker-end="url(#a1)"/>
+  <line x1="582" y1="130" x2="745" y2="135" stroke="#1a1a1a" marker-end="url(#a1)"/>
+  <line x1="582" y1="140" x2="715" y2="167" stroke="#1a1a1a" marker-end="url(#a1)"/>
+  <text x="680" y="200" text-anchor="middle" font-size="11" fill="#555">hash ratchet, sender-only</text>
+
+  <text x="500" y="222" font-size="12" font-weight="600">topology</text>
+  <text x="620" y="222" font-size="12">1:N, group session per room</text>
+  <text x="500" y="247" font-size="12" font-weight="600">forward sec</text>
+  <text x="620" y="247" font-size="12">yes (within session)</text>
+  <text x="500" y="272" font-size="12" font-weight="600">post-comp sec</text>
+  <text x="620" y="272" font-size="12">no — rotate to recover</text>
+  <text x="500" y="297" font-size="12" font-weight="600">used for</text>
+  <text x="620" y="297" font-size="12">m.room.encrypted (PDUs)</text>
+  <text x="500" y="322" font-size="12" font-weight="600">key-share</text>
+  <text x="620" y="322" font-size="12">m.room_key, olm-wrapped</text>
+
+  <!-- linkage arrow -->
+  <path d="M 420 170 Q 450 170 480 170" fill="none" stroke="#7a2c2c" stroke-width="1.5"/>
+  <text x="450" y="160" text-anchor="middle" font-size="10" fill="#7a2c2c">carries</text>
+  <text x="450" y="183" text-anchor="middle" font-size="10" fill="#7a2c2c">m.room_key</text>
+
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+  </defs>
+</svg>
+</figure>
+
+<h2>3. What lives where on the wire</h2>
+
+<p>Nesting from outermost to innermost. The bug lives at the boundary between
+the second and third box: EDUs are best-effort, but the payload they carry
+(the megolm session seed) is the only thing that lets the room ever
+decrypt.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wire format nesting">
+  <!-- Outermost -->
+  <rect x="20" y="20" width="860" height="340" fill="#fff" stroke="#7a2c2c" rx="6"/>
+  <text x="40" y="44" font-size="13" font-weight="700">PUT /federation/v1/send/{txnId}</text>
+  <text x="40" y="60" font-size="11" fill="#555">{ origin, origin_server_ts, pdus[≤50], edus[≤100] }</text>
+
+  <!-- PDUs subbox -->
+  <rect x="40" y="80" width="380" height="260" fill="#fafafa" stroke="#d8d8d8" rx="4"/>
+  <text x="60" y="102" font-size="12" font-weight="700">pdus[]</text>
+  <text x="60" y="118" font-size="11" fill="#555">durable; replicated to every server with a member</text>
+
+  <rect x="60" y="138" width="340" height="50" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="75" y="158" font-size="12">m.room.encrypted (PDU)</text>
+  <text x="75" y="174" font-size="11" fill="#555">algorithm: m.megolm.v1.aes-sha2, ciphertext: ...</text>
+
+  <rect x="60" y="200" width="340" height="50" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="75" y="220" font-size="12">m.room.member, m.room.power_levels, ...</text>
+  <text x="75" y="236" font-size="11" fill="#555">state events update the room state map</text>
+
+  <rect x="60" y="262" width="340" height="50" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="75" y="282" font-size="12">m.room.encryption</text>
+  <text x="75" y="298" font-size="11" fill="#555">rotation_period_ms, rotation_period_msgs</text>
+
+  <!-- EDUs subbox -->
+  <rect x="440" y="80" width="420" height="260" fill="#fafafa" stroke="#c0392b" rx="4"/>
+  <text x="460" y="102" font-size="12" font-weight="700" fill="#c0392b">edus[]</text>
+  <text x="460" y="118" font-size="11" fill="#c0392b">ephemeral; one target server, no durability</text>
+
+  <!-- m.direct_to_device -->
+  <rect x="460" y="138" width="380" height="186" fill="#fff" stroke="#c0392b" rx="3"/>
+  <text x="475" y="158" font-size="12" font-weight="600">edu_type: m.direct_to_device</text>
+  <text x="475" y="174" font-size="11" fill="#555">{ sender, type, message_id, messages: { user → device → ... } }</text>
+
+  <!-- m.room.encrypted (olm) -->
+  <rect x="475" y="190" width="350" height="118" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="490" y="210" font-size="12" font-weight="600">m.room.encrypted (olm-wrapped, per device)</text>
+  <text x="490" y="226" font-size="11" fill="#555">algorithm: m.olm.v1.curve25519-aes-sha2</text>
+
+  <!-- m.room_key innermost -->
+  <rect x="490" y="240" width="320" height="58" fill="#fff" stroke="#7a2c2c" rx="3"/>
+  <text x="505" y="260" font-size="12" font-weight="600" fill="#7a2c2c">m.room_key (the megolm session seed)</text>
+  <text x="505" y="276" font-size="11" fill="#555">algorithm, room_id, session_id, session_key</text>
+  <text x="505" y="292" font-size="11" fill="#555">install this → recipient can decrypt the PDU on the left</text>
+
+  <!-- linking arrow PDU <- m.room_key -->
+  <path d="M 400 165 Q 420 165 440 165" stroke="#7a2c2c" stroke-width="1" fill="none"/>
+</svg>
+</figure>
+
+<h2>4. Trust tiers and key-request gating</h2>
+
+<p>Bots typically sit in <strong>untrusted</strong>. matrix-rust-sdk's default
+key-share policy refuses to forward <code>m.room_key</code>s to untrusted
+devices, so <code>m.room_key_request</code> from a fresh bot device silently
+no-ops.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trust tiers">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+  </defs>
+
+  <!-- Tier boxes -->
+  <rect x="40" y="40" width="220" height="120" fill="#fff" stroke="#c0392b" rx="4"/>
+  <text x="150" y="65" text-anchor="middle" font-size="13" font-weight="700">Untrusted (TOFU)</text>
+  <text x="150" y="85" text-anchor="middle" font-size="11" fill="#555">device key seen, no</text>
+  <text x="150" y="100" text-anchor="middle" font-size="11" fill="#555">cross-signing assertion</text>
+  <text x="150" y="125" text-anchor="middle" font-size="11" fill="#c0392b">red shield in Element</text>
+  <text x="150" y="142" text-anchor="middle" font-size="11" fill="#c0392b">key-gossip refuses</text>
+
+  <rect x="340" y="40" width="220" height="120" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="450" y="65" text-anchor="middle" font-size="13" font-weight="700">Cross-signed</text>
+  <text x="450" y="85" text-anchor="middle" font-size="11" fill="#555">user's master key has</text>
+  <text x="450" y="100" text-anchor="middle" font-size="11" fill="#555">signed this device's identity</text>
+  <text x="450" y="125" text-anchor="middle" font-size="11" fill="#555">renders normally</text>
+  <text x="450" y="142" text-anchor="middle" font-size="11" fill="#555">other clients of same user trust</text>
+
+  <rect x="640" y="40" width="220" height="120" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="750" y="65" text-anchor="middle" font-size="13" font-weight="700">Verified</text>
+  <text x="750" y="85" text-anchor="middle" font-size="11" fill="#555">requesting user has</text>
+  <text x="750" y="100" text-anchor="middle" font-size="11" fill="#555">personally SAS/QR-verified</text>
+  <text x="750" y="125" text-anchor="middle" font-size="11" fill="#555">strongest tier</text>
+  <text x="750" y="142" text-anchor="middle" font-size="11" fill="#555">sticky across logouts</text>
+
+  <!-- transitions -->
+  <line x1="260" y1="100" x2="335" y2="100" stroke="#1a1a1a" marker-end="url(#a2)"/>
+  <text x="298" y="92" text-anchor="middle" font-size="10" fill="#555">self-sign</text>
+  <text x="298" y="115" text-anchor="middle" font-size="10" fill="#555">or cross-user sign</text>
+
+  <line x1="560" y1="100" x2="635" y2="100" stroke="#1a1a1a" marker-end="url(#a2)"/>
+  <text x="598" y="92" text-anchor="middle" font-size="10" fill="#555">SAS / QR</text>
+
+  <!-- bot lane below -->
+  <rect x="40" y="200" width="820" height="100" fill="#fafafa" stroke="#d8d8d8" rx="4"/>
+  <text x="60" y="222" font-size="12" font-weight="700">where do bots sit?</text>
+  <text x="60" y="244" font-size="12">fresh remint (new device_id) → uncross-signed → untrusted by every peer</text>
+  <text x="60" y="263" font-size="12" fill="#c0392b">→ m.room_key_request from this bot is silently dropped by recipients' SDKs</text>
+  <text x="60" y="282" font-size="12" fill="#c0392b">→ no protocol-level recovery available</text>
+</svg>
+</figure>
+
+<h2>5. Federation transaction lifecycle</h2>
+
+<p>Sender retries until <code>200 OK</code>. <strong>200 OK</strong> means
+"transaction accepted for processing" — not "PDUs auth-passed", and
+definitely not "EDUs delivered to client".</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 920 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Federation transaction lifecycle">
+  <defs>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+    <marker id="a3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <!-- Lanes -->
+  <rect x="40" y="20" width="200" height="280" fill="#fff" stroke="#d8d8d8" rx="4"/>
+  <text x="140" y="44" text-anchor="middle" font-size="13" font-weight="700">hs-a</text>
+  <text x="140" y="60" text-anchor="middle" font-size="11" fill="#555">sender</text>
+
+  <rect x="380" y="20" width="200" height="280" fill="#fff" stroke="#d8d8d8" rx="4"/>
+  <text x="480" y="44" text-anchor="middle" font-size="13" font-weight="700">link</text>
+
+  <rect x="720" y="20" width="160" height="280" fill="#fff" stroke="#d8d8d8" rx="4"/>
+  <text x="800" y="44" text-anchor="middle" font-size="13" font-weight="700">hs-b</text>
+  <text x="800" y="60" text-anchor="middle" font-size="11" fill="#555">recipient</text>
+
+  <!-- queue -->
+  <rect x="60" y="80" width="160" height="60" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="140" y="100" text-anchor="middle" font-size="12">per-dest outgoing queue</text>
+  <text x="140" y="118" text-anchor="middle" font-size="11" fill="#555">PDUs + EDUs, FIFO</text>
+  <text x="140" y="132" text-anchor="middle" font-size="11" fill="#555">retry/backoff on failure</text>
+
+  <!-- send -->
+  <line x1="225" y1="105" x2="375" y2="105" stroke="#1a1a1a" marker-end="url(#a3)"/>
+  <text x="300" y="98" text-anchor="middle" font-size="11">PUT /federation/v1/send/{txn}</text>
+  <text x="300" y="120" text-anchor="middle" font-size="11" fill="#555">≤50 PDUs, ≤100 EDUs</text>
+
+  <line x1="585" y1="105" x2="715" y2="105" stroke="#1a1a1a" marker-end="url(#a3)"/>
+
+  <!-- 200 OK back -->
+  <line x1="715" y1="180" x2="225" y2="180" stroke="#1a1a1a" stroke-dasharray="3 3" marker-end="url(#a3)"/>
+  <text x="470" y="173" text-anchor="middle" font-size="11">200 OK = "received, begun processing"</text>
+  <text x="470" y="195" text-anchor="middle" font-size="11" fill="#c0392b">PDUs may still soft-fail; EDUs may be dropped</text>
+
+  <!-- recipient processing -->
+  <rect x="730" y="220" width="140" height="60" fill="#f1efe9" stroke="#d8d8d8" rx="3"/>
+  <text x="800" y="240" text-anchor="middle" font-size="11">apply PDUs</text>
+  <text x="800" y="256" text-anchor="middle" font-size="11">enqueue EDUs</text>
+  <text x="800" y="272" text-anchor="middle" font-size="11" fill="#555">→ next /sync</text>
+
+  <!-- retry loop -->
+  <path d="M 70 165 Q 30 165 30 110 Q 30 80 70 80" fill="none" stroke="#c0392b" stroke-dasharray="4 3" marker-end="url(#a3r)"/>
+  <text x="22" y="155" text-anchor="end" font-size="11" fill="#c0392b">retry on no-200</text>
+  <text x="22" y="170" text-anchor="end" font-size="11" fill="#c0392b">backoff; queue may evict</text>
+</svg>
+</figure>
+
+<h2>6. The bug, traced</h2>
+
+<p>Re-overlay the hero diagram with what fired and what didn't. Red solid =
+this is the dropped hop. Red dotted = the recovery path that exists in spec
+but is gated by trust.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 920 380" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bug trace overlay">
+  <defs>
+    <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/>
+    </marker>
+    <marker id="a4r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/>
+    </marker>
+  </defs>
+
+  <!-- nodes -->
+  <rect x="40" y="60" width="180" height="60" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="130" y="82" text-anchor="middle" font-size="12" font-weight="700">bot @ hs-a</text>
+  <text x="130" y="100" text-anchor="middle" font-size="11" fill="#555">megolm rotates,</text>
+  <text x="130" y="113" text-anchor="middle" font-size="11" fill="#555">sends m.room_key</text>
+
+  <rect x="370" y="60" width="180" height="60" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="460" y="82" text-anchor="middle" font-size="12" font-weight="700">hs-a queue</text>
+  <text x="460" y="100" text-anchor="middle" font-size="11" fill="#555">EDU enqueued for</text>
+  <text x="460" y="113" text-anchor="middle" font-size="11" fill="#555">matrix.org</text>
+
+  <rect x="700" y="60" width="180" height="60" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="790" y="82" text-anchor="middle" font-size="12" font-weight="700">user @ hs-b</text>
+  <text x="790" y="100" text-anchor="middle" font-size="11" fill="#555">never sees</text>
+  <text x="790" y="113" text-anchor="middle" font-size="11" fill="#555">m.room_key</text>
+
+  <!-- arrows top: 200 OK to bot -->
+  <line x1="220" y1="90" x2="365" y2="90" stroke="#1a1a1a" marker-end="url(#a4)"/>
+  <text x="293" y="80" text-anchor="middle" font-size="11">200 OK</text>
+
+  <!-- the dropped EDU hop -->
+  <line x1="550" y1="90" x2="695" y2="90" stroke="#c0392b" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a4r)"/>
+  <text x="623" y="80" text-anchor="middle" font-size="11" fill="#c0392b">EDU dropped</text>
+  <text x="623" y="135" text-anchor="middle" font-size="11" fill="#c0392b">(queue backup / restart-induced eviction)</text>
+
+  <!-- PDU lane below -->
+  <rect x="40" y="180" width="180" height="60" fill="#fff" stroke="#7a2c2c" rx="4"/>
+  <text x="130" y="202" text-anchor="middle" font-size="12" font-weight="700">bot sends "hello"</text>
+  <text x="130" y="220" text-anchor="middle" font-size="11" fill="#555">m.room.encrypted</text>
+  <text x="130" y="233" text-anchor="middle" font-size="11" fill="#555">PDU, durable</text>
+
+  <line x1="220" y1="210" x2="695" y2="210" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#a4)"/>
+  <text x="460" y="200" text-anchor="middle" font-size="11">PDU arrives, federation retries until landed</text>
+
+  <rect x="700" y="180" width="180" height="60" fill="#fff" stroke="#c0392b" rx="4"/>
+  <text x="790" y="202" text-anchor="middle" font-size="12" font-weight="700" fill="#c0392b">undecryptable</text>
+  <text x="790" y="220" text-anchor="middle" font-size="11" fill="#c0392b">has ciphertext, no session</text>
+  <text x="790" y="233" text-anchor="middle" font-size="11" fill="#c0392b">"Unable to decrypt"</text>
+
+  <!-- recovery dotted -->
+  <path d="M 700 280 Q 460 320 220 280" fill="none" stroke="#c0392b" stroke-dasharray="3 4" marker-end="url(#a4r)"/>
+  <text x="460" y="335" text-anchor="middle" font-size="11" fill="#c0392b">recovery: m.room_key_request → m.forwarded_room_key</text>
+  <text x="460" y="352" text-anchor="middle" font-size="11" fill="#c0392b">gated by cross-signing trust → bot is untrusted → no-op</text>
+
+  <!-- legend -->
+  <text x="40" y="370" font-size="10" fill="#555">solid = fired; dashed red = dropped or refused</text>
+</svg>
+</figure>
+
+<h2>7. Continuwuity quick-reference</h2>
+
+<div class="cheatsheet">
+<ul>
+  <li><strong>RocksDB schema 18</strong> at time of writing (spring 2026). Migrations forward-only.</li>
+  <li><strong>Default room_version: v12.</strong> shape-rotator-matrix pins lobbies to <strong>v11</strong> to avoid federated-join state desync.</li>
+  <li><strong>No <code>direct_tls</code></strong> in the published image. Run behind nginx (or similar) for the 8448-equivalent endpoint.</li>
+  <li><strong><code>CONDUWUIT_REGISTRATION_TOKEN</code> seeds DB at first boot only.</strong> Rotate via admin command or wipe data volume.</li>
+  <li><strong>No <code>purge_history</code>.</strong> No per-event admin delete. Only <code>ban-room</code> for mass-cleanup, which is functionally a room delete.</li>
+  <li><strong>Admin tokens bypass <code>rc_message</code> per-user rate limits.</strong> Any send-loop on an admin bot becomes a flood. Don't <code>/send</code> as admin if a non-admin would do.</li>
+  <li><strong><code>/redact</code> caps ~3.5/s</strong> in our measurements even with admin token. Cleaning a 600K-event self-DOS this way takes hours.</li>
+  <li><strong>Restart discipline.</strong> 6+ restarts in 5h can stick matrix.org's federation queue for hours; recovery is "wait", not "more restarts".</li>
+  <li><strong>Bot self-heal:</strong> bots check <code>/account/whoami</code> at boot; remint via <code>/login</code> with persisted password; reuse <code>device_id</code> to keep crypto store intact.</li>
+</ul>
+</div>
+
+<footer>
+  Companion to
+  <a href="matrix-protocol.html">matrix-protocol.html</a> (essay) and
+  <a href="matrix-megolm-rotation-bug.html">matrix-megolm-rotation-bug.html</a>
+  (bug + repro). Corrections via PR or DM
+  (<code>@socrates1024:matrix.org</code>).
+</footer>
+
+</body>
+</html>
